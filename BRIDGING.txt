@@ -1,0 +1,663 @@
+
+
+===== PAGE 1 =====
+
+BRIDGINGDIFFUSIONPRUNING ANDSTEPDISTILLATION WITH
+TEACHER-ALIGNEDREPAIR
+Jincheng Ying, Li Wenlin
+School of Big Data and Artificial Intelligence
+Guangdong University of Finance and Economics
+Guangzhou, China
+jc_ying@student.gdufe.edu.cn,
+wenlin@gdufe.edu.cn
+Minghui Xu
+School of Computer Science
+Shandong University
+Qingdao, China
+mhxu@sdu.edu.cn
+Yinhao Xiao∗
+GDUFE-UCM Joint Institute
+Guangdong University of Finance and Economics
+Guangzhou, China
+20191081@gdufe.edu.cn
+ABSTRACT
+Diffusion models generate high-quality images, but their inference cost comes from two sources:
+large denoising networks and repeated denoising steps. Existing compression pipelines usually
+attack these costs separately. Pruning reduces the network, but most pruning methods still rely on
+a long post-pruning retraining stage to recover a many-step sampler. Step distillation reduces the
+number of denoising steps, but it usually assumes a student that can already follow the teacher well
+enough to receive useful distillation gradients. This paper asks whether post-pruning retraining can
+be replaced by step distillation. We find that the direct replacement fails: after pruning an EDM2-XS
+teacher, starting SiDA from the pruned checkpoint produces unusable samples. We introduce a short
+teacher-alignment repair stage as a bridge between pruning and step distillation. The bridge matches
+the pruned generator to the teacher on noisy real-image latents, then hands the repaired checkpoint to
+one-step distillation. On ImageNet-512, the original EDM2-XS baseline uses 124.713M parameters
+and 63 network evaluations, reaching an FID of 3.53. With a suitable distillation objective, our 20%
+pruned one-step generator uses 98.826M parameters and one network evaluation, reaching an FID of
+3.12. With 30% pruning, the model uses 88.029M parameters and one network evaluation, with an
+FID of 4.26.
+Keywordsdiffusion distillation·one-step generation·structured pruning
+1 Introduction
+Diffusion models have become a central tool for high-quality image synthesis, including unconditional generation,
+class-conditional generation, text-to-image generation, editing, and super-resolution [1, 2, 3, 4]. Their cost has two
+sources. The denoising network is large, and sampling evaluates it repeatedly. On ImageNet-512, the EDM2-XS
+sampler in our setup uses 63 network evaluations per image.
+Most efficiency work reduces one of these two costs. Pruning removes weights, channels, blocks, or heads from a
+pretrained diffusion model [5, 6, 7]. Step distillation reduces the number of denoising evaluations, sometimes to one or
+a few steps [8, 9, 10, 11]. These directions are complementary, but they are usually not connected. A pruned diffusion
+model is commonly recovered by retraining or fine-tuning the pruned network as a many-step sampler. Step distillation,
+in contrast, is normally applied to a student that is already compatible with the teacher’s denoising field.
+∗Corresponding author.
+arXiv:2607.06335v1  [cs.CV]  7 Jul 2026
+
+===== PAGE 2 =====
+
+Bridging Pruning and Step Distillation
+Table 1: Replacing post-pruning retraining with step distillation is not a direct plug-in. The pruned checkpoint fails
+under direct one-step distillation, while the proposed repair bridge makes the same recovery path usable.
+Model Repair NFE #Params FID (↓)
+EDM2-XS teacher [4] – 63 124.713M 3.53
+Pruned + direct SiDA No 1 88.029M 112.56 (failed)
+Ours (20% pruned) Yes 1 98.826M 3.12
+Ours (30% pruned) Yes 1 88.029M 4.26
+This raises a direct question: can the expensive post-pruning retraining stage be replaced by step distillation? If so,
+pruning would reduce the network size and distillation would reduce the sampling trajectory in the same recovery
+process. The recovered model would not be a smaller many-step denoiser. It would be a compact one-step generator.
+The direct replacement does not work in our experiments. We prune an EDM2-XS teacher and start SiDA one-step
+distillation [11] from the pruned checkpoint. The model fails to produce usable samples, as shown in Table 1. This
+failure should not be read as a limitation of SiDA alone. After structured pruning, the student can be far from the teacher
+on the noisy states where a teacher-based distillation loss is evaluated. The distillation method then receives a damaged
+initialization rather than a compact student ready to learn.
+We introduce a bridge between pruning and step distillation: a short teacher-alignment repair stage. Given a pruned
+generator, repair matches its output to the teacher on noisy real-image latents in the high-noise region used by one-step
+generation. It is not a full retraining run. It only moves the pruned generator into a region where a teacher-based
+step-distillation loss has useful gradients. The repaired checkpoint is then used to initialize one-step distillation.
+With a suitable distillation objective, the repaired pruned model can be both smaller and one-step. On EDM2-
+XS/ImageNet-512, the 20% pruned generator improves FID from 3.53 to 3.12 while reducing NFE from 63 to 1. A
+30% pruned generator keeps one-step generation with 88.029M parameters and an FID of 4.26.
+Our main contributions are as follows:
+• We identify post-pruning retraining as a bottleneck for diffusion compression and show that a direct replacement
+by one-step distillation fails after structured pruning.
+• We propose a teacher-alignment repair bridge that connects pruned diffusion architectures to teacher-based
+step distillation without a full retraining run.
+• On EDM2-XS/ImageNet-512, the repaired 20% pruned generator improves FID from 3.53 to 3.12 while
+reducing NFE from 63 to 1; the 30% pruned generator keeps one-step generation with 88.029M parameters.
+2 Related Work
+2.1 Pruning Diffusion Models
+Pruning removes parameters, channels, blocks, or heads from a pretrained model. The usual pipeline then retrains
+or fine-tunes the remaining network so that it can compensate for the removed structure. This pattern goes back to
+early neural network pruning, where weights and connections are removed and the remaining network is retrained [12].
+Diffusion pruning inherits the same recovery problem, but the cost is higher: the pruned model must still preserve a
+denoising field over many noise levels.
+Diff-Pruning uses a Taylor expansion over diffusion timesteps to identify less important structure and recover a
+lightweight diffusion model without extensive retraining [5]. LD-Pruner measures the effect of pruning in latent space
+and uses this signal to prune latent diffusion models across text, image, and audio generation tasks [6]. Recent work
+on Stable Diffusion studies post-training pruning and reports that quality can break abruptly when pruning passes
+certain sparsity levels [7]. Learnable-sparsity pruning goes further toward low-cost recovery by learning differentiable
+structural masks and avoiding a separate retraining phase [13]. These methods reduce the cost of pruning recovery, but
+their output is still a pruned diffusion sampler. Sampling remains iterative.
+2
+
+===== PAGE 3 =====
+
+Bridging Pruning and Step Distillation
+Our goal is different from recovering a smaller many-step denoiser. We use pruning as the architecture reduction step
+and step distillation as the recovery step, so the output of the pipeline is a compact one-step generator. This changes
+the role of post-pruning training. If pruning is followed by a long retraining run, the compression pipeline still pays
+to recover a many-step denoising process before any sampling-step reduction is obtained. We instead use a short
+teacher-alignment repair and then train the compact model with one-step distillation.
+2.2 Diffusion Distillation
+Diffusion distillation reduces the number of sampling steps. Progressive distillation trains a student sampler to replace
+two teacher steps with one, and repeats this halving procedure until only a few steps remain [8]. Consistency models
+learn mappings that are consistent across noise levels and support one-step or few-step generation [9]. Distribution
+Matching Distillation trains a one-step generator by matching the distribution of a multi-step diffusion model with a
+score-difference objective [10]. SiD and SiDA use score identity losses; SiDA adds real images and adversarial training
+to improve one-step distillation from EDM and EDM2 teachers [11].
+These methods mainly address sampling speed. They usually assume that the student has enough capacity and starts
+from an initialization suitable for distillation. Pruning changes both conditions: the student is smaller, and its local
+denoising field can be misaligned with the teacher. Direct one-step distillation from the pruned checkpoint fails in our
+experiments. The repair stage is introduced to make the pruned student a usable starting point for the downstream
+distillation loss.
+2.3 Pruning with Distillation
+Pruning and knowledge distillation are often combined: pruning reduces capacity, and distillation helps the smaller
+model imitate a larger teacher. BK-SDM removes residual and attention blocks from Stable Diffusion and uses
+feature-level knowledge distillation to recover compact text-to-image models [14]. It does not use step distillation, so
+the recovered model is still used as a multi-step diffusion sampler. SnapFusion combines a compact U-Net, decoder
+optimization, and improved step distillation to run text-to-image generation on mobile devices [15]. Its design is an
+effective system recipe for a specific mobile text-to-image pipeline, but the pruning and step-distillation interface is not
+formulated as a general recovery framework for pruned diffusion architectures.
+Our setting combines the two directions at a different interface. We start from the post-pruning recovery bottleneck
+and ask whether the retraining stage can be replaced by step distillation. Direct replacement does not work, so we
+insert a short repair stage before distillation. Repair is not intended to solve generation by itself. It reduces local
+teacher-student denoising mismatch so that a pruned architecture can enter a teacher-based step-distillation objective.
+This gives a general way to connect pruning with one-step or few-step distillation, rather than treating pruning recovery
+and sampling-step reduction as separate recipes.
+3 Method
+Our goal is to replace the usual post-pruning retraining stage with a distillation stage. The recovered model should be a
+compact one-step generator, not a smaller many-step denoiser. The argument is independent of the exact distillation
+loss. We assume only that the downstream distillation method trains a compact generatorGθ against a fixed teacherT
+through some lossD(G θ;T,A).
+The full procedure has four steps. We first prune the EDM2 teacher into a smaller generator architecture. We then test
+the direct path: using this pruned model as the distillation initialization. This path fails because the pruned model is not
+close enough to the teacher’s denoising behavior. We then repair the pruned model by aligning it to the teacher on noisy
+real latents. Finally, we run one-step distillation from the repaired checkpoint. In our implementation the distillation
+method is SiDA, but the repair stage is defined before SiDA and can be paired with other teacher-based distillation
+losses.
+3.1 From Post-Pruning Retraining to Distillation
+LetT denote the pretrained EDM2 teacher. Standard pruning would build a smaller denoiserTS and then retrain or
+fine-tuneTS as a diffusion model. The recovery objective remains tied to denoising:
+TS←arg min
+θ
+Ex,y,σ,ϵ
+h
+∥Tθ(x+σϵ,σ,y)−x∥ 2
+2
+i
+.(1)
+Sampling still needs a reverse diffusion trajectory after this recovery.
+3
+
+===== PAGE 4 =====
+
+Bridging Pruning and Step Distillation
+We instead want the recovery model to be a one-step generatorGθ. Given noiseη and labely, the generator returns a
+latent sample in one call:
+ˆz=Gθ(η,σ init,y).(2)
+LetG0 be the pruned model after weight copying. A direct replacement usesG0 as the initialization for a distillation
+loss:
+Gθ←arg min
+θ:θ0=G0
+D(Gθ;T,A).(3)
+This is only a good replacement for retraining ifG0 lies in the basin where the distillation loss gives useful gradients.
+After structured pruning, that condition can fail. The pruned model has the correct parameter count, but its denoising
+outputs can be far from the teacher on noisy states that the distillation method later uses.
+We formalize this mismatch with a local teacher-alignment error
+ε(G;µ) =E (˜z,σ,y)∼µ
+h
+∥G(˜z,σ,y)−T(˜z,σ,y)∥ 2
+2
+i
+,(4)
+whereµ is a distribution over noisy latent states. If ε(G0;µ) is large, the student and teacher define different local
+denoising fields. A score-based, adversarial, consistency, or regression-based distillation loss may all suffer from this
+bad initialization, because each uses teacher information to shape the generator. The role of repair is to find a nearby
+initializationG align with lowerε(G align;µ)before optimizingD.
+This failure motivates the teacher-alignment repair in Section 3.5. The repair stage is not the original post-pruning
+retraining. It does not train a many-step sampler. It only reduces ε(G;µ) on a small set of noisy real latents, so that
+one-step distillation starts from a model with a meaningful denoising field.
+3.2 Compact Generator Parameterization
+LetT be the pretrained EDM2 teacher and letG be the one-step generator architecture used by SiDA. The compact
+generator keeps the same input and output interface as the teacher. It takes a noisy latent, a noise level, and a class label,
+and it returns a denoised latent. Only the internal architecture is smaller.
+We use two structured pruning operations. The first changes channel widths at each U-Net resolution:
+(c1,c 2,c 3,c 4),(5)
+where eachci is the width at one resolution. The second removes selected branches from U-Net blocks. This is not a
+binary mask. When a branch is removed, the corresponding convolution, embedding projection, attention projection,
+and gain parameters are not instantiated in the compact model.
+For a blockb, branch removal changes the block computation from
+hb+1 = MPsum (hb,Rb(hb,e)) +A b(hb)(6)
+to the surviving skip/resample path. Here Rb denotes the residual branch, Ab denotes self-attention, and e is the
+class/noise embedding. In implementation, both Rb andAb are disabled for selected full-block pruning candidates.
+This gives real parameter reduction and avoids carrying zeroed tensors through inference.
+The channel-pruned variant uses explicit channel lists such as (104,208,384,512) or (104,208,312,416) . When
+widths differ from the teacher, teacher tensors are sliced into the smaller tensors. Decoder blocks need special handling
+because their input is a concatenation of the main path and the skip path. We slice these two parts separately and then
+concatenate the selected indices. This keeps the U-Net skip layout valid after pruning.
+3.3 Teacher-Aware Block Sensitivity
+Width pruning alone can remove many parameters, but it does not tell us which denoising computations are safe to
+remove before distillation. The recovery problem gives a natural importance function. If removing a block makes the
+pruned model’s denoising output move far away from the teacher, distillation starts from a bad point. If the output
+barely changes, the block is a better pruning candidate.
+We first draw a fixed calibration set of real images, encode them to latents, sample noise at a chosen noise levelσ⋆, and
+compute teacher targets
+zi =E(x i),˜z i =z i +σ⋆ϵi, t i =T(˜zi,σ⋆,yi),(7)
+whereEis the V AE encoder. In our ImageNet experiments,σ ⋆ = 2.5.
+4
+
+===== PAGE 5 =====
+
+Bridging Pruning and Step Distillation
+The calibration set defines an empirical distribution ˆµσ⋆ over noisy states at a fixed noise level. For a compact student
+G, the empirical teacher-alignment error is
+ˆεσ⋆(G) = 1
+N
+NX
+i=1
+∥G(˜zi,σ⋆,yi)−t i∥2
+2.(8)
+LetG−b be the same model with candidate block b temporarily removed. The importance of b is the increase in
+teacher-alignment loss:
+I(b) = ˆεσ⋆(G−b)−ˆεσ⋆(G).(9)
+Expanding the difference shows what the score measures:
+I(b) = 1
+N
+NX
+i=1
+G−b(˜zi,σ⋆,yi)−t i
+2
+2−∥G(˜zi,σ⋆,yi)−t i∥2
+2
+
+.(10)
+SmallI(b) means that removing blockb does little damage to the local teacher-student denoising relation used by the
+repair stage. We rank candidate blocks byI(b) and remove low-importance blocks until the parameter budget is reached.
+The exact block names and channel widths are implementation parameters and are reported with the experimental setup.
+3.4 Channel Importance for Width-Pruned Initialization
+We also use a channel-pruned initialization in some variants. For each trainable tensor in the teacher, we compute a
+Taylor-style channel importance score from EDM denoising loss:
+sj←s j +
+X
+k∈Ωj
+wk
+∂LEDM
+∂wk
+,(11)
+where Ωj is the set of weights associated with channelj. Scores are accumulated over calibration mini-batches and
+normalized per dimension. A fraction of prefix channels is protected, and the remaining channels are selected by top-k
+importance. Prefix protection keeps the EDM2 channel layout and attention head structure stable. This width-pruned
+path is useful as a comparison and as a source model for later block pruning, but our best result comes from block
+sensitivity pruning directly from the teacher.
+3.5 Noisy-Real Teacher Alignment
+After pruning,GS has the desired size, but direct distillation does not recover image quality. The pruned model has
+lost part of the teacher’s local denoising field. A downstream distillation loss then starts from samples and noisy states
+where the compact model and the teacher disagree. We therefore alignGS to the teacher before using it as a one-step
+generator.
+The alignment is deliberately short. It is not a new diffusion training run, and it does not try to make the pruned model a
+full many-step sampler. It only asks the pruned model to agree with the teacher at a small set of noisy latent states. Let
+z=E(x)be a real-image latent. We sample noise at a fixed repair levelσ r and match the teacher output:
+˜z=z+σ rϵ,(12)
+Lrepair(GS) =E x,y,ϵ
+h
+∥GS(˜z,σr,y)−T(˜z,σ r,y)∥ 2
+2
+i
+.(13)
+This objective is exactly the local errorε(GS;µ) for the distributionµ induced by real latents and the fixed noise level
+σr. IfθS are the parameters after pruning, a short alignment run gives
+θalign =θS−τ∇ θLrepair(Gθ)
+
+θ=θS
+for a small number of updates.(14)
+The notation only indicates the direction of the update; in practice we use Adam for a short calibration run.
+The choice ofσr follows the role of the repaired model. The one-step generator starts from high-noise latents with
+scaleσinit. If the pruned model is wrong in this high-noise region, the first generated latent is already poor and later
+distillation has little useful signal. We therefore align at the largest relevant noise level:
+σr = max{σinit,σ 1,...,σ K},(15)
+where{σk} are optional diagnostic noise bins used during repair. In our runs,σinit = 2.5 and the bins are below it, so
+σr = 2.5. This choice makes repair focus on the region where one-step generation begins. It also avoids turning repair
+into a full multi-noise retraining procedure.
+5
+
+===== PAGE 6 =====
+
+Bridging Pruning and Step Distillation
+We do not use the generator prior during this stage. The data are real latents, and the target is the teacher denoising
+prediction at the same noisy latent.
+This stage is the bridge between pruning and distillation. Unlike post-pruning retraining, it does not try to recover a
+complete many-step sampler. Its target is narrower: reduce the local teacher-student mismatch on the noisy states that
+initialize one-step generation. Once this mismatch is reduced, the repaired checkpoint is used as the starting point for
+downstream distillation rather than as the final training objective.
+3.6 One-Step Distillation after Alignment
+The aligned compact generatorGθalign initializes the downstream distillation method:
+θ0←θ align, θ ⋆ = arg min
+θ:θ0=θalign
+D(Gθ;T,A).(16)
+The repair stage is useful whenD is locally stable near a teacher-aligned initialization. Suppose the first-order change
+of the distillation loss around the initialization is controlled by the local teacher mismatch:
+∥∇θD(Gθ;T,A)∥≤C 1 +C 2
+p
+ε(Gθ;µ)(17)
+for the noisy-state distributionµ used by the distillation method. This is a mild way to state the assumption used in
+practice: when the student and teacher disagree strongly on the states seen by distillation, the update direction is noisy
+or unhelpful; when they agree locally, the distillation method can refine the generator. Teacher alignment reduces the
+second term before distillation begins.
+In our implementation,D is SiDA. The true score network remains the frozen EDM2 teacherT . The fake-score network
+Fψ is initialized from the teacher and trained with the usual fake-score denoising loss. When adversarial training is
+enabled, the encoder ofFψ also outputs discriminator logits for real and generated latents.
+For generator updates, the SiD identity term compares the teacher and fake-score predictions on noisy generated latents.
+In simplified notation, for generated latentˆz=G θ(η,σ init,y)and noisy latentˆzσ = ˆz+σϵ, the generator loss uses
+(T(ˆzσ,σ,y)−F ψ(ˆzσ,σ,y)) [T(ˆzσ,σ,y)−ˆz−α(T(ˆz σ,σ,y)−F ψ(ˆzσ,σ,y))],(18)
+with the normalization used in SiDA. The adversarial generator loss is added after an initial warm-up. A different
+teacher-based one-step distillation loss could replace this SiDA objective. The repair stage would still serve the same
+purpose: reduce local teacher-student mismatch before the compact generator is optimized as a one-step model.
+4 Experiments
+We evaluate whether post-pruning retraining can be replaced by teacher-aligned one-step distillation. The direct path
+initializes SiDA from the pruned checkpoint without repair. This path fails qualitatively: early samples collapse and
+the model does not produce usable images. With teacher alignment, the same compact architecture becomes trainable
+under SiDA. On ImageNet-512, the repaired compact generator reaches an FID of 3.12 with one network evaluation,
+improving over the original EDM2-XS baseline while using fewer parameters.
+4.1 Datasets
+The main experiments use ImageNet-512 with class labels. Images are encoded into the EDM2 latent space with the
+same V AE interface used by the teacher and by SiDA. Calibration batches for pruning and repair are sampled from real
+training images. We report FID, parameter count, and number of function evaluations. When runtime is reported, it is
+measured on a single RTX 3090.
+4.2 Pruning and Distillation Setup
+We use EDM2-XS as the teacher and construct compact generators with the teacher-aware pruning rule described
+in Section 3. The more compressed model in Table 3 removes low-importance residual-attention branches from
+low-resolution U-Net stages, while keeping the input and output interface unchanged. After pruning, we compare two
+recovery paths. The first path directly starts SiDA from the pruned checkpoint. The second path first repairs the pruned
+generator against the teacher on noisy real latents, then starts SiDA from the repaired checkpoint.
+6
+
+===== PAGE 7 =====
+
+Bridging Pruning and Step Distillation
+Algorithm 1Teacher-aligned pruning-to-distillation
+Require:pretrained teacherT; candidate block setB; target budgetP
+Require:calibration imagesC; calibration noiseσ ⋆; repair noise candidates{σk}K
+k=1
+Require:one-step initialization noiseσ init; distillation lossD(·;T,A)
+Ensure:compact one-step generatorG θ⋆
+1:Encode calibration images to latentsz i =E(x i)and form noisy states˜zi =z i +σ⋆ϵi.
+2:Compute teacher targetst i =T(˜zi,σ⋆,yi).
+3:for allb∈Bdo
+4:Temporarily remove block or branchbfrom the compact candidate to obtainG −b.
+5:Estimate
+I(b) = 1
+N
+X
+i
+ 
+∥G−b(˜zi,σ⋆,yi)−t i∥2
+2−∥G(˜zi,σ⋆,yi)−t i∥2
+2
+
+.
+6:end for
+7:Select low-importance blocks until the compact architecture satisfies budgetP.
+8:BuildG θS by instantiating the compact architecture and copying or slicing teacher weights.
+9:Setσ r = max{σinit,σ 1,...,σ K}.
+10:form= 1,...,M repair do
+11:Sample(x,y)from calibration data, encodez=E(x), and drawϵ∼N(0,I).
+12:Form˜z=z+σ rϵ.
+13:Updateθusing
+∇θ∥Gθ(˜z,σr,y)−T(˜z,σ r,y)∥ 2
+2.
+14:end for
+15:Letθ align be the repaired parameters.
+16:Initialize downstream one-step distillation withθ 0 =θ align.
+17:Optimizeθ ⋆ = arg minθ:θ0=θalignD(Gθ;T,A).
+18:returnG θ⋆
+Table 2: Ablation study on ImageNet-512. The table reports FID for design variants of the pruning-to-distillation
+pipeline.
+Component Variant FID (↓)
+Full pipeline Teacher-aware block pruning, high-noise repair, and SiDA distillation3.16
+Repair bridge Direct SiDA from the pruned checkpoint, without teacher-alignment repair 112.56
+Repair bridge Use only a limited teacher-alignment repair before SiDA 17.23
+Pruning form Replace block pruning with channel pruning while preserving attention-
+compatible widths
+9.42
+Pruning form Use body-only channel pruning without preserving attention-compatible widths 41.85
+Block-selection score Replace the teacher-alignment score with an alternative pruning score 8.16
+Block selection Select blocks greedily instead of using the proposed block set 5.86
+Block selection Use an exhaustive candidate search under the same pruning family 6.06
+Repair noise Use multi-noise block ranking and repair instead of fixed high-noise repair 8.96
+4.3 Implementation Details
+For ImageNet-512, the downstream distillation stage uses SiDA with the frozen EDM2 teacher as the true score
+model and a fake-score network initialized from the teacher. Sampling from the final compact generator uses one
+generator evaluation in latent space followed by V AE decoding. The run-level pruning, repair, optimizer, and CIFAR-10
+Diff-Instruct settings are listed in Appendix A.
+4.4 Ablation Study
+Table 2 isolates the main design choices in the pruning-to-distillation pipeline. All rows use EDM2-XS as the teacher and
+SiDA as the downstream one-step distillation loss. Rather than listing training runs, the table changes one component
+at a time when possible: the repair bridge, the pruning form, the block-selection score, and the repair noise used for
+alignment. Parameter counts and runtime are reported in the benchmark table; the ablation table focuses on what each
+component contributes.
+7
+
+===== PAGE 8 =====
+
+Bridging Pruning and Step Distillation
+Table 3: Benchmark performance on ImageNet-512 without classifier-free guidance. Dashes indicate values not reported
+in the source comparison or not measured under our setup.
+Method (CFG=N) NFE (↓) #Params FID (↓) Inference Time (↓) Speedup
+ADM-G [2] 250 559M 23.24 – –
+U-DiT-B [16] 250 204M 15.39 – –
+DiT-XL/2 [17] 250 675M 12.03 – –
+MaskDiT [18] 79 736M 10.79 – –
+ADM-U [2] 250 >559M 9.96 – –
+LEGO-XL-PR [19] 250 681M 9.01 – –
+BigGAN-deep [20] 1 160M 8.43 – –
+DiMR-XL/3R [21] 250 525M 7.93 – –
+MaskGIT [22] 12 227M 7.32 – –
+MAGVIT-v2 [23] 12 307M 4.61 – –
+RIN [24] 1000 320M 3.95 – –
+MAGVIT-v2 [23] 64 307M 3.07 – –
+VDM++ [25] 512 2B 2.99 – –
+MAR [26] 100 481M 2.74 – –
+StyleGAN-XL [27]1×2168M 2.41 – –
+SiDA-EDM2-XS [11] 1 125M2.228±0.037– –
+EDM2-XS [4] 63 124.713M 3.53 3390.8 ms/img1.0×
+Ours (20% pruned) 1 98.826M 3.12 62.7 ms/img54.1×
+Ours (30% pruned) 1 88.029M 4.26 51.6 ms/img65.7×
+The ablations support the two main design choices. First, the repair bridge is not optional: direct SiDA from the pruned
+checkpoint fails badly, while teacher alignment gives the downstream distillation loss a usable starting point. Second,
+the pruning criterion should be tied to the teacher’s local denoising behavior. Channel-only pruning, alternative scores,
+and multi-noise variants are all weaker than the proposed teacher-aware block selection followed by fixed high-noise
+repair.
+4.5 Benchmark Performance
+Table 3 compares class-conditional ImageNet-512 generation without classifier-free guidance. Most baseline values
+follow the SiDA comparison table [11], with each method cited separately. We add the original EDM2-XS baseline and
+our repaired compact generators. Runtime is included as a hardware-specific reference: measured times use a single
+RTX 3090, and speedup is computed against EDM2-XS under the same measurement script.
+Qualitative samples from the repaired compact generators are shown in Appendix B.
+To test whether the repair bridge is tied to SiDA, we also apply it with Diff-Instruct [28] on CIFAR-10. This experiment
+asks whether a different step-distillation objective can accept a pruned student after the same short teacher-alignment
+stage. Table 4 reports the CIFAR-10 unconditional benchmark with the inception score column removed; the CIFAR-10
+pruning and repair settings are given in Appendix A.
+8
+
+===== PAGE 9 =====
+
+Bridging Pruning and Step Distillation
+Table 4: Unconditional sample quality on CIFAR-10. Runtime and GPU memory are reported for measured rows with
+batch size 128.∗Methods that require synthetic data construction for distillation.†Methods that require real data for
+distillation.
+Method NFE (↓) #Params FID (↓) GPU Memory (↓) Inference Time (↓) Speedup
+Multiple Steps (include Diffusion Distillation)
+DDPM [1] 1000 – 3.17 – – –
+LSGM [29] 147 – 2.10 – – –
+PFGM [30] 110 – 2.35 – – –
+EDM [31] 35 55.734M 1.97 1584.1 MB 36.953 s1.000×
+DDIM [32] 50 – 4.67 – – –
+DDIM [32] 10 – 8.23 – – –
+DPM-Solver-2 [33] 12 – 5.28 – – –
+DPM-Solver-3 [33] 12 – 6.03 – – –
+3-DEIS [34] 10 – 4.17 – – –
+UniPC [35] 8 – 5.10 – – –
+UniPC [35] 5 – 23.22 – – –
+Denoise Diffusion GAN (T=2) [36] 2 – 4.08 – – –
+PD [8] 2 – 5.58 – – –
+CT [9] 2 – 5.83 – – –
+CD† [9] 2 – 2.93 – – –
+Single Step
+Denoise Diffusion GAN (T=1) [36] 1 – 14.6 – – –
+KD∗ [37] 1 – 9.36 – – –
+TDPM [38] 1 – 8.91 – – –
+1-ReFlow [39] 1 – 378 – – –
+CT [9] 1 – 8.70 – – –
+1-ReFlow (+distill)∗ [39] 1 – 6.18 – – –
+2-ReFlow (+distill)∗ [39] 1 – 4.85 – – –
+3-ReFlow (+distill)∗ [39] 1 – 5.21 – – –
+PD [8] 1 – 8.34 – – –
+CD-L2† [9] 1 – 7.90 – – –
+CD-LPIPS† [9] 1 – 3.55 – – –
+Diff-Instruct [28] 1 55.73M 4.53 1576.1 MB 1.060 s34.853×
+Ours (34% pruned) 1 36.807M 5.32 1253.3 MB 0.921 s40.118×
+5 Limitations
+The method still depends on the downstream distillation algorithm. We present repair as a general teacher-alignment
+step, but the current implementation mainly covers one-step latent generation with SiDA on EDM2-XS/ImageNet-512
+and Diff-Instruct on CIFAR-10. Multi-step distillation remains open and may need a different repair noise schedule.
+The repair stage also introduces choices such asσr, calibration data, update count, and candidate block set; although it
+is much shorter than full retraining, it is still an added stage and currently needs real images or representative latents.
+6 Conclusion
+We reframed post-pruning recovery as a distillation problem. A direct replacement of retraining with one-step distillation
+leaves the pruned generator too misaligned with the teacher to produce usable samples. The proposed repair stage
+reduces this local mismatch before distillation, allowing the compact generator to train as a one-step model. On
+EDM2-XS/ImageNet-512, the repaired 20% pruned generator improves FID over the original EDM2-XS baseline
+while reducing NFE from 63 to 1. These results suggest that post-pruning recovery can be redirected from many-step
+retraining to compact one-step generation.
+References
+[1] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. InAdvances in Neural
+Information Processing Systems, 2020.
+9
+
+===== PAGE 10 =====
+
+Bridging Pruning and Step Distillation
+[2] Prafulla Dhariwal and Alex Nichol. Diffusion models beat gans on image synthesis. InAdvances in Neural
+Information Processing Systems, 2021.
+[3] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Björn Ommer. High-resolution image
+synthesis with latent diffusion models. InIEEE/CVF Conference on Computer Vision and Pattern Recognition,
+2022.
+[4] Tero Karras, Miika Aittala, Jaakko Lehtinen, Janne Hellsten, Timo Aila, and Samuli Laine. Analyzing and
+improving the training dynamics of diffusion models.arXiv preprint arXiv:2312.02696, 2023.
+[5] Gongfan Fang, Xinyin Ma, and Xinchao Wang. Structural pruning for diffusion models. InAdvances in Neural
+Information Processing Systems, 2023.
+[6] Thibault Castells, Hyoung-Kyu Song, Bo-Kyeong Kim, and Shinkook Choi. LD-Pruner: Efficient pruning of
+latent diffusion models using task-agnostic insights.arXiv preprint arXiv:2404.11936, 2024.
+[7] Samarth N. Ramesh and Zhixue Zhao. Efficient pruning of text-to-image models: Insights from pruning stable
+diffusion.arXiv preprint arXiv:2411.15113, 2024.
+[8] Tim Salimans and Jonathan Ho. Progressive distillation for fast sampling of diffusion models. InInternational
+Conference on Learning Representations, 2022.
+[9] Yang Song, Prafulla Dhariwal, Mark Chen, and Ilya Sutskever. Consistency models. InInternational Conference
+on Machine Learning, 2023.
+[10] Tianwei Yin, Michaël Gharbi, Richard Zhang, Eli Shechtman, Frédo Durand, William T. Freeman, and Taesung
+Park. One-step diffusion with distribution matching distillation. InIEEE/CVF Conference on Computer Vision
+and Pattern Recognition, 2024.
+[11] Mingyuan Zhou, Huangjie Zheng, Yi Gu, Zhendong Wang, and Hai Huang. Adversarial score identity distillation:
+Rapidly surpassing the teacher in one step.arXiv preprint arXiv:2410.14919, 2024.
+[12] Song Han, Jeff Pool, John Tran, and William J. Dally. Learning both weights and connections for efficient neural
+networks.arXiv preprint arXiv:1506.02626, 2015.
+[13] Yang Zhang, Er Jin, Wenzhong Liang, Yanfei Dong, Ashkan Khakzar, Philip Torr, Johannes Stegmaier, and Kenji
+Kawaguchi. Learnable sparsity for vision generative models.arXiv preprint arXiv:2412.02852, 2024.
+[14] Bo-Kyeong Kim, Hyoung-Kyu Song, Thibault Castells, and Shinkook Choi. BK-SDM: A lightweight, fast, and
+cheap version of stable diffusion. InEuropean Conference on Computer Vision, 2024.
+[15] Yanyu Li, Huan Wang, Qing Jin, Ju Hu, Pavlo Chemerys, Yun Fu, Yanzhi Wang, Sergey Tulyakov, and Jian
+Ren. Snapfusion: Text-to-image diffusion model on mobile devices within two seconds. InAdvances in Neural
+Information Processing Systems, 2023.
+[16] Yuchuan Tian, Zhijun Tu, Hanting Chen, Jie Hu, Chao Xu, and Yunhe Wang. U-DiTs: Downsample tokens in
+u-shaped diffusion transformers. InAdvances in Neural Information Processing Systems, 2024.
+[17] William Peebles and Saining Xie. Scalable diffusion models with transformers. InInternational Conference on
+Computer Vision, 2023.
+[18] Hongkai Zheng, Weili Nie, Arash Vahdat, and Anima Anandkumar. Fast training of diffusion models with masked
+transformers.Transactions on Machine Learning Research, 2024.
+[19] Huangjie Zheng, Zhendong Wang, Jianbo Yuan, Guanghan Ning, Pengcheng He, Quanzeng You, Hongxia
+Yang, and Mingyuan Zhou. Learning stackable and skippable LEGO bricks for efficient, reconfigurable, and
+variable-resolution diffusion modeling.International Conference on Learning Representations, 2024.
+[20] Andrew Brock, Jeff Donahue, and Karen Simonyan. Large scale GAN training for high fidelity natural image
+synthesis. InInternational Conference on Learning Representations, 2019.
+[21] Qihao Liu, Zhanpeng Zeng, Ju He, Qihang Yu, Xiaohui Shen, and Liang-Chieh Chen. Alleviating distortion in
+image generation via multi-resolution diffusion models and time-dependent layer normalization.arXiv preprint
+arXiv:2406.09416, 2024.
+[22] Huiwen Chang, Han Zhang, Lu Jiang, Ce Liu, and William T. Freeman. MaskGIT: Masked generative image
+transformer. InIEEE/CVF Conference on Computer Vision and Pattern Recognition, 2022.
+[23] Lijun Yu, José Lezama, Nitesh B. Gundavarapu, Luca Versari, Kihyuk Sohn, David Minnen, Yong Cheng,
+Vighnesh Birodkar, Agrim Gupta, Xiuye Gu, Alexander G. Hauptmann, Boqing Gong, Ming-Hsuan Yang, Irfan
+Essa, David A. Ross, and Lu Jiang. Language model beats diffusion – tokenizer is key to visual generation. In
+International Conference on Learning Representations, 2024.
+10
+
+===== PAGE 11 =====
+
+Bridging Pruning and Step Distillation
+[24] Allan Jabri, David Fleet, and Ting Chen. Scalable adaptive computation for iterative generation. InInternational
+Conference on Machine Learning, 2023.
+[25] Diederik P. Kingma and Ruiqi Gao. Understanding diffusion objectives as the ELBO with simple data augmenta-
+tion.arXiv preprint arXiv:2303.00848, 2023.
+[26] Tianhong Li, Yonglong Tian, He Li, Mingyang Deng, and Kaiming He. Autoregressive image generation without
+vector quantization. InAdvances in Neural Information Processing Systems, 2024.
+[27] Axel Sauer, Katja Schwarz, and Andreas Geiger. StyleGAN-XL: Scaling StyleGAN to large diverse datasets.
+ACM Transactions on Graphics, 2022.
+[28] Weijian Luo, Tianyang Hu, Shifeng Zhang, Jiacheng Sun, Zhenguo Li, and Zhihua Zhang. Diff-instruct: A
+universal approach for transferring knowledge from pre-trained diffusion models.arXiv preprint arXiv:2305.18455,
+2023.
+[29] Arash Vahdat, Karsten Kreis, and Jan Kautz. Score-based generative modeling in latent space. InAdvances in
+Neural Information Processing Systems, 2021.
+[30] Yilun Xu, Ziming Liu, Max Tegmark, and Tommi Jaakkola. Poisson flow generative models. InAdvances in
+Neural Information Processing Systems, 2022.
+[31] Tero Karras, Miika Aittala, Timo Aila, and Samuli Laine. Elucidating the design space of diffusion-based
+generative models. InAdvances in Neural Information Processing Systems, 2022.
+[32] Jiaming Song, Chenlin Meng, and Stefano Ermon. Denoising diffusion implicit models. InInternational
+Conference on Learning Representations, 2021.
+[33] Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan Li, and Jun Zhu. DPM-Solver: A fast ODE solver
+for diffusion probabilistic model sampling in around 10 steps. InAdvances in Neural Information Processing
+Systems, 2022.
+[34] Qinsheng Zhang and Yongxin Chen. Fast sampling of diffusion models with exponential integrator. InInternational
+Conference on Learning Representations, 2023.
+[35] Wenliang Zhao, Lujia Bai, Yongming Rao, Jie Zhou, and Jiwen Lu. UniPC: A unified predictor-corrector
+framework for fast sampling of diffusion models. InAdvances in Neural Information Processing Systems, 2023.
+[36] Zhisheng Xiao, Karsten Kreis, and Arash Vahdat. Tackling the generative learning trilemma with denoising
+diffusion GANs. InInternational Conference on Learning Representations, 2022.
+[37] Eric Luhman and Troy Luhman. Knowledge distillation in iterative generative models for improved sampling
+speed. InarXiv preprint arXiv:2101.02388, 2021.
+[38] Huangjie Zheng, Weili Nie, Arash Vahdat, Kamyar Azizzadenesheli, and Anima Anandkumar. Truncated diffusion
+probabilistic models and diffusion-based adversarial auto-encoders. InInternational Conference on Learning
+Representations, 2022.
+[39] Xingchao Liu, Chengyue Gong, and Qiang Liu. Flow straight and fast: Learning to generate and transfer data
+with rectified flow.arXiv preprint arXiv:2209.03003, 2022.
+11
+
+===== PAGE 12 =====
+
+Bridging Pruning and Step Distillation
+Appendix
+A Reproducibility Details
+The main text keeps the experimental narrative at the protocol level. This appendix records the run-level settings needed
+to reproduce the reported pruning and repair runs.
+A.1 ImageNet-512 Settings
+For ImageNet-512, the teacher is EDM2-XS with 124.713M parameters. The two compact generators reported in
+Table 3 have 98.826M and 88.029M parameters. Block sensitivity is estimated atσ⋆ = 2.5 with 8 calibration batches
+and 8 samples per batch. The teacher-alignment repair stage usesσr = 2.5 and an effective batch size of 128. After
+repair, SiDA is run with the frozen EDM2 teacher as the true score model and a fake-score network initialized from the
+teacher.
+For exact replication of the more compressed ImageNet model in Table 3, the disabled EDM2 U-Net branches are listed
+below. These names refer to implementation modules in the EDM2 U-Net and are not part of the method definition.
+Table 5: Disabled branches for the more compressed ImageNet-512 compact generator.
+U-Net side Disabled branches
+Encoderenc.8x8_block0,enc.8x8_block1,enc.8x8_block2
+Decoderdec.8x8_in0,dec.8x8_block3,dec.16x16_block1
+A.2 CIFAR-10 Diff-Instruct Settings
+For the CIFAR-10 experiment in Table 4, we start from the public EDM CIFAR-10 unconditional VP checkpoint and
+use Diff-Instruct as the downstream one-step distillation objective. The dataset is CIFAR-10 at 32×32 resolution, with
+50k training images, no labels, and no horizontal flipping. The teacher architecture is EDMPrecond SongUNet with
+128 base channels, channel multipliers(2,2,2), dropout 0.13, andσ init = 1.0.
+Table 6: Common CIFAR-10 distillation settings used with Diff-Instruct.
+Item Setting
+Teacher checkpoint EDM CIFAR-10 unconditional VP checkpoint
+Distillation loss Diff-InstructDI_EDMLoss
+Generator optimizer Adam, learning rate1×10 −5, betas(0,0.999),ϵ= 10 −8
+Score-generator optimizer Adam, learning rate1×10 −5, betas(0,0.999),ϵ= 10 −8
+Training batch size 128
+EMA half-life 500 kimg
+Evaluation metric FID-50k full
+Table 7: CIFAR-10 pruning and repair settings for the compact Diff-Instruct students.
+Item 18% compact student 34% compact student
+Pruning scope and type Generator-only width pruning Generator-only width pruning
+Channel selection Prefix EDM parameter Taylor score Prefix EDM parameter Taylor score
+Target pruning ratio 0.20 0.32
+Selected base channels 116 104
+Parameter count 45.78M from a 55.73M teacher 36.81M from a 55.73M teacher
+Actual parameter reduction 17.86% 33.96%
+Protected channel fraction 0.9 0.9
+Calibration 8 pruning batches; score batch 8; 2 Diff-Taylor batches Same
+Diff-Taylor score 16 steps with threshold 0.05 Same
+Noise bins for pruning checks{1.0,0.3,0.09}Same
+Repair schedule 12k steps, batch 16, learning rate2×10 −4 Same
+Repair noise Lognormal noise; max-loss selection over 16 sigma steps Same
+Repair weights Init/noisy weights0/1; score gen/mean/max weights1/5/1Same
+12
+
+===== PAGE 13 =====
+
+Bridging Pruning and Step Distillation
+B Additional Qualitative Results
+Figure 1: ImageNet-512 samples from our 20% pruned one-step generator. This model reaches an FID of 3.12 with
+98.826M parameters and one network evaluation.
+13
+
+===== PAGE 14 =====
+
+Bridging Pruning and Step Distillation
+Figure 2: CIFAR-10 samples from our 34% pruned one-step generator distilled with Diff-Instruct.
+14
